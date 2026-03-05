@@ -116,29 +116,87 @@ println("Number of V² measurements: ", data.nv2)
 println("Number of T3 measurements: ", data.nt3amp)
 
 # Set up image reconstruction parameters
-println("\\nSetting up image reconstruction...")
+println("\nSetting up image reconstruction...")
 
 # Image size and pixel scale
-npix = 128  # Number of pixels (power of 2 works best)
-pixsize = 0.1  # Pixel size in milliarcseconds (mas)
-
-# Create initial image (uniform disk as starting point)
-initial_image = ones(npix, npix)
-initial_image = initial_image ./ sum(initial_image)  # Normalize
-
-# Regularization parameters
-regularizers = [
-    ("entropy", 1e-3),     # Maximum entropy regularization
-    ("tv", 1e-4),          # Total variation (edge preservation)
-    ("l2", 1e-5)           # L2 smoothness
-]
+npix = 256  # Number of pixels (power of 2 works best)
+fov = 12.0  # Field of view in milliarcseconds (mas) - reduced to avoid periodic artifacts
+pixsize = fov / npix  # Pixel size in mas (~0.047 mas/pixel)
 
 println("Image size: $npix x $npix pixels")
 println("Pixel scale: $pixsize mas/pixel")
-println("Field of view: $(npix * pixsize) mas")
+println("Field of view: $fov mas")
+
+# Create initial image as a uniform disk model
+# Disk diameter in mas
+disk_diameter = 4.0  # mas
+disk_radius_pixels = (disk_diameter / 2.0) / pixsize  # Convert to pixels
+
+println("Creating initial uniform disk model...")
+println("  Disk diameter: $disk_diameter mas")
+println("  Disk radius: $disk_radius_pixels pixels")
+
+# Create coordinate grids
+center = npix / 2 + 0.5
+x = repeat(1:npix, 1, npix) .- center
+y = repeat((1:npix)', npix, 1) .- center
+r = sqrt.(x.^2 .+ y.^2)  # Radial distance from center in pixels
+
+# Create uniform disk: 1 inside radius, 0 outside
+initial_image = zeros(Float64, npix, npix)
+initial_image[r .<= disk_radius_pixels] .= 1.0
+
+# Normalize to unit flux
+initial_image = initial_image ./ sum(initial_image)
+
+# Optional: Save initial model for comparison
+println("Saving initial model image...")
+extent = fov / 2
+coords = range(-extent, extent, length=npix)
+p_initial = heatmap(coords, coords,
+            initial_image',
+            aspect_ratio=:equal,
+            xlabel="RA offset (mas)",
+            ylabel="Dec offset (mas)",
+            title="Initial Model - Uniform Disk ($disk_diameter mas)",
+            color=:hot,
+            clims=(0, maximum(initial_image)))
+savefig(p_initial, "initial_model.png")
+println("Saved: initial_model.png")
+
+# Regularization parameters
+# Available regularizers: "centering", "tv", "tvsq", "l1l2", "l1l2w", "l1hyp",
+#                         "l2sq", "compactness", "radialvar", "entropy", "support"
+
+# Strategy 1: Current (balanced smoothness + edges)
+regularizers = [
+    ("centering", 1e-2),   # Strong centering to avoid edge artifacts
+    ("entropy", 1e-3),     # Maximum entropy regularization
+    ("tv", 1e-4),          # Total variation (edge preservation)
+    ("l2sq", 1e-5)         # L2 squared smoothness
+]
+
+# Strategy 2: Edge-preserving (uncomment to try)
+# regularizers = [
+#     ("centering", 1e-2),
+#     ("tv", 1e-3),        # Dominant: preserves sharp features
+#     ("l2sq", 1e-5)
+# ]
+
+# Strategy 3: Maximum smoothness (uncomment to try)
+# regularizers = [
+#     ("centering", 1e-2),
+#     ("entropy", 1e-2),   # Dominant: very smooth result
+# ]
+
+# Strategy 4: Compactness (for point-like sources, uncomment to try)
+# regularizers = [
+#     ("compactness", 1e-2),  # Keeps object compact and centered
+#     ("entropy", 1e-3),
+# ]
 
 # Run image reconstruction
-println("\\nRunning image reconstruction...")
+println("\nRunning image reconstruction...")
 println("This may take several minutes...")
 
 try
@@ -152,19 +210,33 @@ try
 
     # reconstruct expects: (initial_image, data, nfft_plan; keyword_args)
     println("Running reconstruction algorithm...")
+    println("Note: Look for colored output showing V2, T3A, T3P values on each iteration")
+    println("      These are REDUCED chi-squared values (chi²/N_measurements)")
+    println("      Target: values close to 1.0 indicate good fit\n")
+
     reconstructed_image = reconstruct(
         initial_image,
         data,
         nfft_plan,
-        maxiter=400,
+        maxiter=2000,        # Increased, but should converge before this
         verb=true,
-        regularizers=[("centering", 1e-3)]
+        regularizers=regularizers,
+        ftol=(1e-4, 1e-6),   # Relaxed relative tolerance: stop when chi² changes < 0.01%
+        xtol=(1e-4, 1e-6),   # Relaxed relative tolerance for image changes
+        gtol=(1e-4, 1e-6)    # Relaxed relative tolerance for gradient
     )
     
     println("\\nReconstruction complete!")
-    
+
+    # Display final image statistics
+    println("\\nFinal image statistics:")
+    println("  Min pixel value: $(minimum(reconstructed_image))")
+    println("  Max pixel value: $(maximum(reconstructed_image))")
+    println("  Total flux: $(sum(reconstructed_image))")
+    println("  Image dimensions: $(size(reconstructed_image))")
+
     # Display and save results
-    println("Creating visualization...")
+    println("\\nCreating visualization...")
     
     # Create coordinate arrays for plotting
     extent = npix * pixsize / 2
