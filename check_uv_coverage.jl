@@ -52,14 +52,54 @@ function Base.getproperty(target::OIFITS.OI_TARGET, sym::Symbol)
     end
 end
 
-# File path
-filename = "C:/Users/johnb/OneDrive/Documents/Projects/Astronomy/MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits"
+# Prompt for filename
+println("\nEnter the path to your OIFITS file:")
+println("(Press Enter to use: MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits)")
+print("> ")
 
-println("Loading OIFITS data...")
-data = readoifits(filename)
+user_input = readline()
 
-if isa(data, AbstractArray)
-    data = data[1]
+if isempty(strip(user_input))
+    filename = "MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits"
+    println("Using default file: $filename")
+else
+    filename = strip(user_input)
+end
+
+if !isfile(filename)
+    println("\n⚠ Error: File not found: $filename")
+    println("\nPress Enter to exit...")
+    readline()
+    exit(1)
+end
+
+println("\nLoading OIFITS data from: $filename...")
+data = nothing
+try
+    data = readoifits(filename)
+    if isa(data, AbstractArray)
+        data = data[1]
+    end
+catch e
+    if occursin("OI_ARRAY", string(e))
+        println("\n⚠ ERROR: This OIFITS file is missing the OI_ARRAY table.")
+        println("\nThe OI_ARRAY table contains telescope array information that OITOOLS")
+        println("requires for UV coverage analysis. Without it, this script cannot proceed.")
+        println("\nPossible solutions:")
+        println("  1. Use quick_diagnostic.jl instead (supports files without OI_ARRAY)")
+        println("  2. Find a version of this data file that includes OI_ARRAY")
+        println("  3. Contact the data provider about the missing table")
+        println("\nNote: Some older OIFITS v1 files may not have this table.")
+        println("\nPress Enter to exit...")
+        readline()
+        exit(1)
+    else
+        println("\n⚠ ERROR: Failed to load OIFITS file:")
+        println(e)
+        println("\nPress Enter to exit...")
+        readline()
+        exit(1)
+    end
 end
 
 println("\n" * "="^60)

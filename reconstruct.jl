@@ -3,6 +3,7 @@ using OITOOLS
 using FITSIO
 using OIFITS
 using Plots
+using Statistics
 
 # Workaround: Define missing OIFITS functions that OITOOLS expects
 Core.eval(OIFITS, quote
@@ -88,17 +89,73 @@ function save_fits(image, filename, pixsize)
     println("FITS file saved: $filename")
 end
 
-# File path
-filename = "C:/Users/johnb/OneDrive/Documents/Projects/Astronomy/MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits"
+# Prompt user for OIFITS file
+println("="^70)
+println("OIFITS IMAGE RECONSTRUCTION")
+println("="^70)
+println("\nEnter the path to your OIFITS file:")
+println("(Press Enter to use: MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits)")
+print("> ")
 
-println("Loading OIFITS data...")
+user_input = readline()
+
+if isempty(strip(user_input))
+    # Use default
+    filename = "MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits"
+    println("Using default file: $filename")
+else
+    filename = strip(user_input)
+end
+
+# Check if file exists
+if !isfile(filename)
+    println("\n⚠ Error: File not found: $filename")
+    println("\nAvailable .oifits files in current directory:")
+    oifits_files = filter(f -> endswith(f, ".oifits"), readdir("."))
+    if isempty(oifits_files)
+        println("  (none found)")
+    else
+        for f in oifits_files
+            println("  - $f")
+        end
+    end
+    println("\nPress Enter to exit...")
+    readline()
+    exit(1)
+end
+
+println("\n" * "="^70)
+println("Loading OIFITS data from: $filename")
+println("="^70)
 
 # Now use OITOOLS readoifits function
-data = readoifits(filename)
-
-println("Data loaded successfully")
-println("Data type: ", typeof(data))
-println("Data size: ", size(data))
+data = nothing
+try
+    data = readoifits(filename)
+    println("Data loaded successfully")
+    println("Data type: ", typeof(data))
+    println("Data size: ", size(data))
+catch e
+    if occursin("OI_ARRAY", string(e))
+        println("\n⚠ ERROR: This OIFITS file is missing the OI_ARRAY table.")
+        println("\nThe OI_ARRAY table contains telescope array information that OITOOLS")
+        println("requires for image reconstruction. Without it, reconstruction cannot proceed.")
+        println("\nPossible solutions:")
+        println("  1. Find a version of this data file that includes OI_ARRAY")
+        println("  2. Use quick_diagnostic.jl to analyze the data quality")
+        println("  3. Contact the data provider about the missing table")
+        println("\nNote: Some older OIFITS v1 files may not have this table.")
+        println("\nPress Enter to exit...")
+        readline()
+        exit(1)
+    else
+        println("\n⚠ ERROR: Failed to load OIFITS file:")
+        println(e)
+        println("\nPress Enter to exit...")
+        readline()
+        exit(1)
+    end
+end
 
 # readoifits returns an array of OIdata objects
 # For single-wavelength data, it's typically a 1-element array
@@ -119,9 +176,9 @@ println("Number of T3 measurements: ", data.nt3amp)
 println("\nSetting up image reconstruction...")
 
 # Image size and pixel scale
-npix = 256  # Number of pixels (power of 2 works best)
-fov = 12.0  # Field of view in milliarcseconds (mas) - reduced to avoid periodic artifacts
-pixsize = fov / npix  # Pixel size in mas (~0.047 mas/pixel)
+npix = 256  # Number of pixels (increased for better sampling)
+fov = 100.0  # Large FOV for extended sources (~5-6x typical source size)
+pixsize = fov / npix  # Pixel size in mas (~0.39 mas/pixel)
 
 println("Image size: $npix x $npix pixels")
 println("Pixel scale: $pixsize mas/pixel")
@@ -132,25 +189,89 @@ println("Field of view: $fov mas")
 disk_diameter = 4.0  # mas
 disk_radius_pixels = (disk_diameter / 2.0) / pixsize  # Convert to pixels
 
-println("Creating initial uniform disk model...")
-println("  Disk diameter: $disk_diameter mas")
-println("  Disk radius: $disk_radius_pixels pixels")
+# Choose initial model type
+initial_model = "disk"  # Use disk - simpler, less structure to create artifacts
 
-# Create coordinate grids
+# Create coordinate grids (used by all models)
 center = npix / 2 + 0.5
 x = repeat(1:npix, 1, npix) .- center
 y = repeat((1:npix)', npix, 1) .- center
 r = sqrt.(x.^2 .+ y.^2)  # Radial distance from center in pixels
 
-# Create uniform disk: 1 inside radius, 0 outside
-initial_image = zeros(Float64, npix, npix)
-initial_image[r .<= disk_radius_pixels] .= 1.0
+if initial_model == "disk"
+    println("Creating initial uniform disk model...")
+
+    # AUTO-ADJUST disk size based on mean V²
+    # These thresholds match quick_diagnostic.jl recommendations
+    mean_v2 = mean(data.v2)
+
+    if mean_v2 > 0.7
+        disk_diameter = 2.0  # Very compact, ~1-3 mas
+    elseif mean_v2 > 0.4
+        disk_diameter = 4.0  # Compact, ~3-6 mas
+    elseif mean_v2 > 0.2
+        disk_diameter = 8.0  # Moderately resolved, ~6-12 mas
+    elseif mean_v2 > 0.1
+        disk_diameter = 18.0  # Well resolved, ~12-25 mas
+    elseif mean_v2 > 0.05
+        disk_diameter = 25.0  # Very extended
+    else
+        disk_diameter = 30.0  # Extremely extended, >25 mas
+    end
+
+    println("  Data mean V²: $(round(mean_v2, digits=4))")
+    println("  Auto-selected disk diameter: $disk_diameter mas")
+
+    disk_radius_pixels = (disk_diameter / 2.0) / pixsize
+    println("  Disk radius: $(round(disk_radius_pixels, digits=1)) pixels")
+
+    # Create uniform disk: 1 inside radius, 0 outside
+    initial_image = zeros(Float64, npix, npix)
+    initial_image[r .<= disk_radius_pixels] .= 1.0
+
+elseif initial_model == "gaussian"
+    println("Creating initial Gaussian model...")
+
+    # AUTO-ADJUST Gaussian size based on mean V²
+    # These thresholds match quick_diagnostic.jl recommendations
+    mean_v2 = mean(data.v2)
+
+    if mean_v2 > 0.7
+        fwhm_mas = 2.0  # Very compact, ~1-3 mas
+    elseif mean_v2 > 0.4
+        fwhm_mas = 4.0  # Compact, ~3-6 mas
+    elseif mean_v2 > 0.2
+        fwhm_mas = 8.0  # Moderately resolved, ~6-12 mas
+    elseif mean_v2 > 0.1
+        fwhm_mas = 18.0  # Well resolved, ~12-25 mas
+    elseif mean_v2 > 0.05
+        fwhm_mas = 25.0  # Very extended
+    else
+        fwhm_mas = 30.0  # Extremely extended, >25 mas
+    end
+
+    println("  Data mean V²: $(round(mean_v2, digits=4))")
+    println("  Auto-selected FWHM: $fwhm_mas mas")
+
+    fwhm_pixels = fwhm_mas / pixsize
+    sigma_pixels = fwhm_pixels / 2.355  # Convert FWHM to sigma
+    println("  Sigma: $(round(sigma_pixels, digits=1)) pixels")
+
+    # Create 2D Gaussian
+    initial_image = exp.(-(r.^2) ./ (2 * sigma_pixels^2))
+
+else  # "flat"
+    println("Creating flat uniform initial model...")
+    # Completely uniform - no structure
+    initial_image = ones(Float64, npix, npix)
+end
 
 # Normalize to unit flux
 initial_image = initial_image ./ sum(initial_image)
+println("  Peak pixel value: $(round(maximum(initial_image), sigdigits=4))")
 
-# Optional: Save initial model for comparison
-println("Saving initial model image...")
+# Save initial model and check if it matches data
+println("\nSaving initial model image...")
 extent = fov / 2
 coords = range(-extent, extent, length=npix)
 p_initial = heatmap(coords, coords,
@@ -158,42 +279,43 @@ p_initial = heatmap(coords, coords,
             aspect_ratio=:equal,
             xlabel="RA offset (mas)",
             ylabel="Dec offset (mas)",
-            title="Initial Model - Uniform Disk ($disk_diameter mas)",
+            title="Initial Model - $initial_model",
             color=:hot,
             clims=(0, maximum(initial_image)))
 savefig(p_initial, "initial_model.png")
 println("Saved: initial_model.png")
 
+# Quick check: how well does initial model match data?
+println("\nChecking initial model visibility amplitudes...")
+nfft_test = setup_nfft(data, npix, pixsize)
+cvis_initial = image_to_vis(initial_image, nfft_test[1])
+v2_initial = vis_to_v2(cvis_initial, data.indx_v2)
+println("  Data V² range: $(round(minimum(data.v2), digits=3)) to $(round(maximum(data.v2), digits=3))")
+println("  Model V² range: $(round(minimum(v2_initial), digits=3)) to $(round(maximum(v2_initial), digits=3))")
+println("  Data V² mean: $(round(mean(data.v2), digits=3))")
+println("  Model V² mean: $(round(mean(v2_initial), digits=3))")
+
+if abs(mean(v2_initial) - mean(data.v2)) < 0.05
+    println("  ✓ Initial model V² amplitude matches data well")
+elseif mean(v2_initial) > mean(data.v2) + 0.1
+    println("  ⚠ Initial model too compact - try larger size or 'flat' initial model")
+elseif mean(v2_initial) < mean(data.v2) - 0.1
+    println("  ⚠ Initial model too extended - try smaller size")
+else
+    println("  → Reasonable starting point")
+end
+
 # Regularization parameters
 # Available regularizers: "centering", "tv", "tvsq", "l1l2", "l1l2w", "l1hyp",
 #                         "l2sq", "compactness", "radialvar", "entropy", "support"
 
-# Strategy 1: Current (balanced smoothness + edges)
+# VERY LIGHT regularization to improve chi²
+# With chi² ~20, regularization is preventing data fit
 regularizers = [
-    ("centering", 1e-2),   # Strong centering to avoid edge artifacts
-    ("entropy", 1e-3),     # Maximum entropy regularization
-    ("tv", 1e-4),          # Total variation (edge preservation)
-    ("l2sq", 1e-5)         # L2 squared smoothness
+    ("centering", 5e-4),    # Just keep centered
+    ("entropy", 2e-4),      # Very light smoothing
+    ("tv", 5e-5),           # Minimal edge preservation
 ]
-
-# Strategy 2: Edge-preserving (uncomment to try)
-# regularizers = [
-#     ("centering", 1e-2),
-#     ("tv", 1e-3),        # Dominant: preserves sharp features
-#     ("l2sq", 1e-5)
-# ]
-
-# Strategy 3: Maximum smoothness (uncomment to try)
-# regularizers = [
-#     ("centering", 1e-2),
-#     ("entropy", 1e-2),   # Dominant: very smooth result
-# ]
-
-# Strategy 4: Compactness (for point-like sources, uncomment to try)
-# regularizers = [
-#     ("compactness", 1e-2),  # Keeps object compact and centered
-#     ("entropy", 1e-3),
-# ]
 
 # Run image reconstruction
 println("\nRunning image reconstruction...")
@@ -218,12 +340,13 @@ try
         initial_image,
         data,
         nfft_plan,
-        maxiter=2000,        # Increased, but should converge before this
+        maxiter=2000,
         verb=true,
         regularizers=regularizers,
-        ftol=(1e-4, 1e-6),   # Relaxed relative tolerance: stop when chi² changes < 0.01%
-        xtol=(1e-4, 1e-6),   # Relaxed relative tolerance for image changes
-        gtol=(1e-4, 1e-6)    # Relaxed relative tolerance for gradient
+        weights=[1.0, 0.5, 0.5],  # Increased T3 weight - let closure phases contribute more
+        ftol=(1e-4, 1e-6),
+        xtol=(1e-4, 1e-6),
+        gtol=(1e-4, 1e-6)
     )
     
     println("\\nReconstruction complete!")
