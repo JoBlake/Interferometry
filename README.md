@@ -1,10 +1,160 @@
-# OIFITS Image Reconstruction
+# Optical Interferometry Data Analysis Toolkit
 
-This Julia script performs image reconstruction from optical interferometry data in OIFITS format using the OITOOLS package.
+A comprehensive suite of Julia tools for analyzing optical/infrared interferometry data in OIFITS format. Includes image reconstruction, diagnostics, parametric modeling, and analysis utilities for MIRCX and other interferometric data.
 
 ## Overview
 
-The script reads OIFITS files containing visibility and closure phase measurements from optical interferometers and reconstructs an image of the observed astronomical object using iterative optimization techniques.
+This toolkit provides end-to-end analysis capabilities for optical interferometry observations:
+- **Image reconstruction** from visibility and closure phase data
+- **Data quality diagnostics** and coverage analysis
+- **Parametric model fitting** as an alternative to reconstruction
+- **Post-reconstruction analysis** tools for measuring source properties
+
+## Available Tools
+
+### Main Programs
+
+#### `reconstruct.jl` - Image Reconstruction
+Performs model-independent image reconstruction from OIFITS data using regularized optimization. Produces reconstructed images in both PNG and FITS formats.
+
+**Features:**
+- Auto-adjusts initial model size based on visibility amplitudes
+- Supports multiple regularization methods (entropy, TV, centering)
+- Interactive file selection
+- Detailed convergence monitoring
+
+**Usage:** `julia reconstruct.jl`
+
+**Output:** `reconstructed_image.png`, `reconstructed_image.fits`, `initial_model.png`
+
+#### `model_fit.jl` - Parametric Model Fitting
+Alternative to image reconstruction that fits simple geometric models (uniform disk, elliptical disk) to interferometric data. Useful when you want to avoid reconstruction artifacts or when the source is expected to be simple.
+
+**Features:**
+- Fits uniform circular disk
+- Fits elliptical disk with position angle
+- Uses only V² data to avoid closure phase artifacts
+- Provides chi-squared statistics for model comparison
+
+**Usage:** `julia model_fit.jl`
+
+### Diagnostic Tools
+
+#### `quick_diagnostic.jl` - Fast Data Quality Check
+Quick analysis of OIFITS data to understand source characteristics before reconstruction. Works even with files missing the OI_ARRAY table.
+
+**Features:**
+- Visibility amplitude statistics
+- Source size estimation from mean V²
+- Closure phase RMS analysis
+- Automatic recommendations for initial model parameters
+
+**Usage:** `julia quick_diagnostic.jl`
+
+**Best for:** First look at new data, troubleshooting files
+
+#### `check_uv_coverage.jl` - UV Coverage Analysis
+Analyzes the spatial frequency coverage of your interferometric observations and recommends optimal image parameters.
+
+**Features:**
+- Calculates maximum angular resolution
+- Recommends pixel size (Nyquist sampling)
+- Determines appropriate field of view
+- Generates UV coverage plots and baseline histograms
+
+**Usage:** `julia check_uv_coverage.jl`
+
+**Output:** `uv_coverage.png`, `baseline_distribution.png`
+
+**Best for:** Planning reconstruction parameters
+
+#### `diagnose_reconstruction.jl` - Comprehensive Reconstruction Diagnostics
+In-depth analysis of data quality and forward modeling tests to diagnose reconstruction issues.
+
+**Features:**
+- Signal-to-noise ratio statistics
+- Tests NFFT setup with forward models
+- Evaluates uniform disk and point source models
+- UV coverage uniformity analysis
+- Provides specific troubleshooting recommendations
+
+**Usage:** `julia diagnose_reconstruction.jl`
+
+**Best for:** Understanding why reconstruction isn't working as expected
+
+### Analysis Tools
+
+#### `analyze_result.jl` - Reconstructed Image Analysis
+Analyzes the properties of a reconstructed image, providing statistics and visualizations.
+
+**Features:**
+- Image statistics (min, max, mean, flux distribution)
+- Flux concentration analysis
+- Radial profile computation
+- Contour plot generation
+
+**Usage:** `julia analyze_result.jl`
+
+**Output:** `reconstructed_contours.png`, `radial_profile.png`
+
+**Best for:** Understanding the structure of your reconstructed image
+
+#### `measure_ellipticity.jl` - Source Property Measurement
+Measures physical properties of reconstructed sources using moment analysis.
+
+**Features:**
+- Centroid location
+- Major/minor axis FWHM measurements
+- Ellipticity calculation
+- Position angle determination
+- Half-light radius
+- Multiple measurement methods (moments, contours)
+
+**Usage:** `julia measure_ellipticity.jl`
+
+**Best for:** Getting quantitative measurements from reconstructions
+
+### Utility Tools
+
+#### `check_versions.jl` - Package Version Checker
+Displays installed versions of all required packages and their exported functions. Useful for debugging compatibility issues.
+
+**Usage:** `julia check_versions.jl`
+
+#### `inspect_oitarget.jl` - OIFITS Structure Inspector
+Low-level inspection tool for examining the OI_TARGET table structure in OIFITS files. Useful for debugging OIFITS compatibility issues.
+
+**Usage:** `julia inspect_oitarget.jl`
+
+## Recommended Workflow
+
+1. **First time with new data:**
+   ```bash
+   julia quick_diagnostic.jl          # Understand your data
+   julia check_uv_coverage.jl         # Determine image parameters
+   ```
+
+2. **Image reconstruction:**
+   ```bash
+   julia reconstruct.jl               # Run reconstruction
+   ```
+
+3. **If reconstruction looks wrong:**
+   ```bash
+   julia diagnose_reconstruction.jl   # Diagnose issues
+   # Adjust parameters in reconstruct.jl based on recommendations
+   ```
+
+4. **Analyze results:**
+   ```bash
+   julia analyze_result.jl            # View image properties
+   julia measure_ellipticity.jl       # Get quantitative measurements
+   ```
+
+5. **Alternative approach (if reconstruction has artifacts):**
+   ```bash
+   julia model_fit.jl                 # Try parametric fitting instead
+   ```
 
 ## Requirements
 
@@ -29,58 +179,73 @@ Pkg.add("Plots")
 
 ## Usage
 
-### Basic Usage
+### Quick Start
 
-1. Edit the `filename` variable in `reconstruct.jl` to point to your OIFITS file:
-```julia
-filename = "path/to/your/file.oifits"
-```
+Most tools are interactive and will prompt for the OIFITS file:
 
-2. Run the script:
 ```bash
 julia reconstruct.jl
+# Press Enter to use default file or type path to your .oifits file
 ```
 
-### Output
+### Common Outputs
 
-The script generates two output files:
-- **reconstructed_image.png** - Visualization of the reconstructed image
-- **reconstructed_image.fits** - FITS file containing the image data with WCS headers
+Different tools generate various outputs:
+- **Images (PNG):** `reconstructed_image.png`, `initial_model.png`, `uv_coverage.png`, `baseline_distribution.png`, `reconstructed_contours.png`, `radial_profile.png`
+- **FITS files:** `reconstructed_image.fits` (with WCS headers)
+- **Console output:** Statistics, recommendations, and diagnostic information
 
 ## Configuration
 
-### Image Parameters
+### Image Reconstruction Parameters (`reconstruct.jl`)
 
-Adjust these parameters in the script to customize the reconstruction:
+Adjust these parameters to customize the reconstruction:
 
 ```julia
-npix = 128        # Image size in pixels (power of 2 recommended)
-pixsize = 0.1     # Pixel scale in milliarcseconds (mas)
-maxiter = 400     # Maximum number of iterations
+# Image grid
+npix = 256        # Image size in pixels (power of 2 recommended)
+fov = 100.0       # Field of view in mas
+pixsize = fov / npix  # Pixel scale (auto-calculated)
+
+# Initial model
+initial_model = "gaussian"  # Options: "gaussian", "disk", "flat"
+
+# Optimization
+maxiter = 5000    # Maximum number of iterations
+ftol = (1e-5, 1e-7)  # Function tolerance
+xtol = (1e-5, 1e-7)  # Parameter tolerance
+gtol = (1e-5, 1e-7)  # Gradient tolerance
+
+# Data weighting
+weights = [1.0, 1.0, 1.0]  # [V², T3amp, T3phi]
 ```
 
 ### Regularization
 
-The reconstruction uses regularization to constrain the solution. Current setting:
+The reconstruction uses multiple regularizers to constrain the solution:
 
 ```julia
-regularizers=[("centering", 1e-3)]
-```
-
-Available regularization options:
-- `"centering"` - Keeps the image centered
-- `"tv"` - Total variation (preserves sharp edges)
-- `"entropy"` - Maximum entropy (produces smoother images)
-- `"l2"` - L2 smoothness penalty
-
-Example with multiple regularizers:
-```julia
-regularizers=[
-    ("entropy", 1e-3),
-    ("tv", 1e-4),
-    ("centering", 1e-5)
+regularizers = [
+    ("centering", 1e-4),   # Keep image centered
+    ("entropy", 5e-5),     # Light smoothing for stability
+    ("tv", 1e-5),          # Very light total variation for edges
 ]
 ```
+
+**Available regularizers:**
+- `"centering"` - Keeps the image centered (always recommended)
+- `"entropy"` - Maximum entropy (smoothness)
+- `"tv"` - Total variation (preserves sharp edges)
+- `"tvsq"` - Squared total variation (smoother edges)
+- `"l1l2"`, `"l1l2w"`, `"l1hyp"` - Sparsity penalties
+- `"l2sq"` - L2 smoothness
+- `"compactness"` - Favors compact sources
+- `"radialvar"` - Minimizes radial variations
+
+**Tuning tips:**
+- **Too much regularization:** Reconstruction looks like initial model → reduce weights by 10×
+- **Too little regularization:** Noisy, unstable result → increase weights by 2-5×
+- **Balance:** Final chi² should be ~1.0 for good data fit
 
 ## Compatibility Fixes
 
