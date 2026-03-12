@@ -131,7 +131,7 @@ println("="^70)
 # Now use OITOOLS readoifits function
 data = nothing
 try
-    data = readoifits(filename)
+    global data = readoifits(filename)
     println("Data loaded successfully")
     println("Data type: ", typeof(data))
     println("Data size: ", size(data))
@@ -161,11 +161,11 @@ end
 # For single-wavelength data, it's typically a 1-element array
 if isa(data, AbstractArray)
     if length(data) == 1
-        data = data[1]  # Extract the single OIdata object
+        global data = data[1]  # Extract the single OIdata object
     else
         # For multi-wavelength, we might need the first channel or all of them
         println("Multi-wavelength data detected: $(length(data)) channels")
-        data = data[1]  # Use first wavelength channel for now
+        global data = data[1]  # Use first wavelength channel for now
     end
 end
 
@@ -190,12 +190,12 @@ disk_diameter = 4.0  # mas
 disk_radius_pixels = (disk_diameter / 2.0) / pixsize  # Convert to pixels
 
 # Choose initial model type
-initial_model = "disk"  # Use disk - simpler, less structure to create artifacts
+initial_model = "gaussian"  # Use Gaussian - smooth starting point
 
 # Create coordinate grids (used by all models)
 center = npix / 2 + 0.5
-x = repeat(1:npix, 1, npix) .- center
-y = repeat((1:npix)', npix, 1) .- center
+x = repeat(reshape(1:npix, 1, npix), npix, 1) .- center  # Row vector repeated down
+y = repeat(reshape(1:npix, npix, 1), 1, npix) .- center  # Column vector repeated across
 r = sqrt.(x.^2 .+ y.^2)  # Radial distance from center in pixels
 
 if initial_model == "disk"
@@ -309,12 +309,12 @@ end
 # Available regularizers: "centering", "tv", "tvsq", "l1l2", "l1l2w", "l1hyp",
 #                         "l2sq", "compactness", "radialvar", "entropy", "support"
 
-# VERY LIGHT regularization to improve chi²
-# With chi² ~20, regularization is preventing data fit
+# Moderate regularization - balance between data fidelity and stability
+# Reduced from original but not too weak
 regularizers = [
-    ("centering", 5e-4),    # Just keep centered
-    ("entropy", 2e-4),      # Very light smoothing
-    ("tv", 5e-5),           # Minimal edge preservation
+    ("centering", 1e-4),    # Keep centered
+    ("entropy", 5e-5),      # Light smoothing for stability
+    ("tv", 1e-5),           # Very light total variation for edges
 ]
 
 # Run image reconstruction
@@ -340,26 +340,26 @@ try
         initial_image,
         data,
         nfft_plan,
-        maxiter=2000,
+        maxiter=5000,  # More iterations for better convergence
         verb=true,
         regularizers=regularizers,
-        weights=[1.0, 0.5, 0.5],  # Increased T3 weight - let closure phases contribute more
-        ftol=(1e-4, 1e-6),
-        xtol=(1e-4, 1e-6),
-        gtol=(1e-4, 1e-6)
+        weights=[1.0, 1.0, 1.0],  # Equal weight to all data - V2, T3 amplitude, T3 phase
+        ftol=(1e-5, 1e-7),  # Tighter convergence tolerances
+        xtol=(1e-5, 1e-7),
+        gtol=(1e-5, 1e-7)
     )
     
-    println("\\nReconstruction complete!")
+    println("\nReconstruction complete!")
 
     # Display final image statistics
-    println("\\nFinal image statistics:")
+    println("\nFinal image statistics:")
     println("  Min pixel value: $(minimum(reconstructed_image))")
     println("  Max pixel value: $(maximum(reconstructed_image))")
     println("  Total flux: $(sum(reconstructed_image))")
     println("  Image dimensions: $(size(reconstructed_image))")
 
     # Display and save results
-    println("\\nCreating visualization...")
+    println("\nCreating visualization...")
     
     # Create coordinate arrays for plotting
     extent = npix * pixsize / 2
@@ -383,9 +383,9 @@ try
     save_fits(reconstructed_image, "reconstructed_image.fits", pixsize)
     
 catch e
-    println("\\nError during reconstruction:")
+    println("\nError during reconstruction:")
     println(e)
-    println("\\nStacktrace:")
+    println("\nStacktrace:")
     for (exc, bt) in Base.catch_stack()
         showerror(stdout, exc, bt)
         println()
