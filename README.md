@@ -38,6 +38,8 @@ Alternative to image reconstruction that fits simple geometric models (uniform d
 
 **Usage:** `julia model_fit.jl`
 
+can you change the application so as to provide 3 sliders to input the values for the regularization method
+parameters: entropy, TV, and centering. Loop asking for different regularizing parameters until user enters exit
 ### Diagnostic Tools
 
 #### `quick_diagnostic.jl` - Fast Data Quality Check
@@ -315,23 +317,21 @@ The FITS file includes:
 - **WCS headers**: RA/Dec coordinates with TAN projection
 - **Pixel scale**: Converted to degrees for standard compliance
 
-## Example
+## Quick Reference Table
 
-```julia
-# Reconstruct eps Aurigae from OIFITS data
-filename = "2009-11-eps_Aur-avg5.oifits"
+| Task | Tool | Requires OI_ARRAY? | Output |
+|------|------|-------------------|--------|
+| First look at data | `quick_diagnostic.jl` | No | Console stats + recommendations |
+| Check UV coverage | `check_uv_coverage.jl` | Yes | PNG plots + parameter suggestions |
+| Reconstruct image | `reconstruct.jl` | Yes | PNG + FITS images |
+| Diagnose reconstruction issues | `diagnose_reconstruction.jl` | Yes | Console diagnostics + recommendations |
+| Fit simple models | `model_fit.jl` | Yes | Console results (disk parameters) |
+| Analyze reconstructed image | `analyze_result.jl` | No | PNG plots + statistics |
+| Measure source properties | `measure_ellipticity.jl` | No | Console measurements (size, shape) |
+| Check package versions | `check_versions.jl` | No | Console output |
+| Debug OIFITS structure | `inspect_oitarget.jl` | No | Console output |
 
-# Settings for this target
-npix = 128
-pixsize = 0.1  # mas
-maxiter = 400
-
-# The script will output:
-# Number of V² measurements: 240
-# Number of T3 measurements: 240
-# Image size: 128 x 128 pixels
-# Field of view: 12.8 mas
-```
+**Note:** Tools requiring OI_ARRAY will fail on some older OIFITS v1 files. Use `quick_diagnostic.jl` for such files.
 
 ## References
 
@@ -345,10 +345,19 @@ maxiter = 400
 - Some older OIFITS files may be missing required columns (handled via `hack_revn=1`)
 - Convergence warnings are common and don't necessarily indicate bad results
 
+## Data Files
+
+The repository includes example OIFITS files:
+- `MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits` - CHARA/MIRCX observation of V CVn
+- `2009-11-eps_Aur-avg5.oifits` - Historical observation of epsilon Aurigae
+
 ## License
 
-This script is provided as-is for astronomical data analysis.
+This toolkit is provided as-is for astronomical data analysis.
 
-## Author
+## Notes
 
-Created for processing MIRCX and optical interferometry data.
+- All tools include compatibility patches for OITOOLS v0.8.0 + OIFITS v2.0.0
+- Tools are designed for CHARA/MIRCX data but work with any OIFITS files
+- Most tools are interactive and will prompt for input files
+- Reconstruction quality depends heavily on UV coverage and SNR

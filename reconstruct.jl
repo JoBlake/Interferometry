@@ -94,14 +94,14 @@ println("="^70)
 println("OIFITS IMAGE RECONSTRUCTION")
 println("="^70)
 println("\nEnter the path to your OIFITS file:")
-println("(Press Enter to use: MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits)")
+println("(Press Enter to use: Pi_GRU.oifits)")
 print("> ")
 
 user_input = readline()
 
 if isempty(strip(user_input))
     # Use default
-    filename = "MIRCX_L2.2025May20.V_CVn.MIRCX_IDL.GHS.AVG6m.oifits"
+    filename = "Pi_GRU.oifits"
     println("Using default file: $filename")
 else
     filename = strip(user_input)
@@ -177,8 +177,8 @@ println("\nSetting up image reconstruction...")
 
 # Image size and pixel scale
 npix = 256  # Number of pixels (increased for better sampling)
-fov = 100.0  # Large FOV for extended sources (~5-6x typical source size)
-pixsize = fov / npix  # Pixel size in mas (~0.39 mas/pixel)
+fov = 30.0  # FOV optimized for ~10-15 mas stellar disks
+pixsize = fov / npix  # Pixel size in mas (~0.12 mas/pixel)
 
 println("Image size: $npix x $npix pixels")
 println("Pixel scale: $pixsize mas/pixel")
@@ -190,7 +190,7 @@ disk_diameter = 4.0  # mas
 disk_radius_pixels = (disk_diameter / 2.0) / pixsize  # Convert to pixels
 
 # Choose initial model type
-initial_model = "gaussian"  # Use Gaussian - smooth starting point
+initial_model = "gaussian"  # Use Gaussian - more realistic for stellar disks
 
 # Create coordinate grids (used by all models)
 center = npix / 2 + 0.5
@@ -272,8 +272,24 @@ println("  Peak pixel value: $(round(maximum(initial_image), sigdigits=4))")
 
 # Save initial model and check if it matches data
 println("\nSaving initial model image...")
+println("Initial model statistics:")
+println("  Min: $(minimum(initial_image))")
+println("  Max: $(maximum(initial_image))")
+println("  Mean: $(mean(initial_image))")
+println("  Sum: $(sum(initial_image))")
+
 extent = fov / 2
 coords = range(-extent, extent, length=npix)
+
+# For initial model, use appropriate color scale
+init_min = minimum(initial_image)
+init_max = maximum(initial_image)
+if init_max - init_min < 0.1 * init_max
+    init_clims = (init_min, init_max)
+else
+    init_clims = (0, init_max)
+end
+
 p_initial = heatmap(coords, coords,
             initial_image',
             aspect_ratio=:equal,
@@ -281,7 +297,7 @@ p_initial = heatmap(coords, coords,
             ylabel="Dec offset (mas)",
             title="Initial Model - $initial_model",
             color=:hot,
-            clims=(0, maximum(initial_image)))
+            clims=init_clims)
 savefig(p_initial, "initial_model.png")
 println("Saved: initial_model.png")
 
@@ -305,93 +321,216 @@ else
     println("  → Reasonable starting point")
 end
 
-# Regularization parameters
-# Available regularizers: "centering", "tv", "tvsq", "l1l2", "l1l2w", "l1hyp",
-#                         "l2sq", "compactness", "radialvar", "entropy", "support"
+# Setup NFFT once (reused for all reconstructions)
+println("\nSetting up NFFT...")
+nfft_plan = setup_nfft(data, npix, pixsize)
 
-# Moderate regularization - balance between data fidelity and stability
-# Reduced from original but not too weak
-regularizers = [
-    ("centering", 1e-4),    # Keep centered
-    ("entropy", 5e-5),      # Light smoothing for stability
-    ("tv", 1e-5),           # Very light total variation for edges
-]
+# Interactive loop for regularization parameters
+reconstruction_count = 0
+while true
+    global reconstruction_count
+    reconstruction_count += 1
 
-# Run image reconstruction
-println("\nRunning image reconstruction...")
-println("This may take several minutes...")
+    println("\n" * "="^70)
+    println("REGULARIZATION PARAMETER INPUT (Reconstruction #$reconstruction_count)")
+    println("="^70)
+    println("\nAvailable regularizers: centering, entropy, tv (Total Variation)")
+    println("Typical ranges: 1e-8 (very weak) to 1e-4 (strong)")
+    println("\nRecommended starting values (based on Pi_GRU target):")
+    println("  - Centering: 1e-5 (prevents image drift)")
+    println("  - Entropy:   1e-6 (moderate smoothing)")
+    println("  - TV:        1e-6 (moderate edge preservation)")
+    println("\nPress Enter for defaults, or enter custom value")
+    println("Type 'exit' at any prompt to quit\n")
 
-try
-    # Basic reconstruction using OITOOLS
-    println("Starting image reconstruction with maximum entropy regularization...")
+    # Input for centering parameter
+    print("Enter CENTERING parameter [1e-5]: ")
+    centering_input = strip(readline())
+    if lowercase(centering_input) == "exit"
+        println("\nExiting reconstruction loop...")
+        break
+    end
+    if isempty(centering_input)
+        centering_value = 1e-5
+        println("  Using default: 1e-5")
+    else
+        centering_value = tryparse(Float64, centering_input)
+        if centering_value === nothing
+            println("⚠ Invalid input. Using default: 1e-5")
+            centering_value = 1e-5
+        end
+    end
 
-    # Setup NFFT (Non-uniform FFT) for the reconstruction
-    # This creates the mapping between image and visibilities
-    println("Setting up NFFT...")
-    nfft_plan = setup_nfft(data, npix, pixsize)
+    # Input for entropy parameter
+    print("Enter ENTROPY parameter [1e-6]: ")
+    entropy_input = strip(readline())
+    if lowercase(entropy_input) == "exit"
+        println("\nExiting reconstruction loop...")
+        break
+    end
+    if isempty(entropy_input)
+        entropy_value = 1e-6
+        println("  Using default: 1e-6")
+    else
+        entropy_value = tryparse(Float64, entropy_input)
+        if entropy_value === nothing
+            println("⚠ Invalid input. Using default: 1e-6")
+            entropy_value = 1e-6
+        end
+    end
 
-    # reconstruct expects: (initial_image, data, nfft_plan; keyword_args)
-    println("Running reconstruction algorithm...")
-    println("Note: Look for colored output showing V2, T3A, T3P values on each iteration")
-    println("      These are REDUCED chi-squared values (chi²/N_measurements)")
-    println("      Target: values close to 1.0 indicate good fit\n")
+    # Input for TV parameter
+    print("Enter TV (Total Variation) parameter [1e-6]: ")
+    tv_input = strip(readline())
+    if lowercase(tv_input) == "exit"
+        println("\nExiting reconstruction loop...")
+        break
+    end
+    if isempty(tv_input)
+        tv_value = 1e-6
+        println("  Using default: 1e-6")
+    else
+        tv_value = tryparse(Float64, tv_input)
+        if tv_value === nothing
+            println("⚠ Invalid input. Using default: 1e-6")
+            tv_value = 1e-6
+        end
+    end
 
-    reconstructed_image = reconstruct(
-        initial_image,
-        data,
-        nfft_plan,
-        maxiter=5000,  # More iterations for better convergence
-        verb=true,
-        regularizers=regularizers,
-        weights=[1.0, 1.0, 1.0],  # Equal weight to all data - V2, T3 amplitude, T3 phase
-        ftol=(1e-5, 1e-7),  # Tighter convergence tolerances
-        xtol=(1e-5, 1e-7),
-        gtol=(1e-5, 1e-7)
-    )
-    
-    println("\nReconstruction complete!")
+    # Build regularizers list
+    regularizers = [
+        ("centering", centering_value),
+        ("entropy", entropy_value),
+        ("tv", tv_value)
+    ]
 
-    # Display final image statistics
-    println("\nFinal image statistics:")
-    println("  Min pixel value: $(minimum(reconstructed_image))")
-    println("  Max pixel value: $(maximum(reconstructed_image))")
-    println("  Total flux: $(sum(reconstructed_image))")
-    println("  Image dimensions: $(size(reconstructed_image))")
+    println("\n" * "-"^70)
+    println("Regularization settings:")
+    println("  Centering: $centering_value")
+    println("  Entropy:   $entropy_value")
+    println("  TV:        $tv_value")
+    println("-"^70)
 
-    # Display and save results
-    println("\nCreating visualization...")
-    
-    # Create coordinate arrays for plotting
-    extent = npix * pixsize / 2
-    coords = range(-extent, extent, length=npix)
-    
-    # Plot the reconstructed image
-    p = heatmap(coords, coords,
-                reconstructed_image',
-                aspect_ratio=:equal,
-                xlabel="RA offset (mas)",
-                ylabel="Dec offset (mas)",
-                title="Reconstructed Image - V CVn",
-                color=:hot,
-                clims=(0, maximum(reconstructed_image)))
-    
-    savefig(p, "reconstructed_image.png")
-    println("Saved: reconstructed_image.png")
-    
-    # Also save as FITS file
-    println("Saving FITS file...")
-    save_fits(reconstructed_image, "reconstructed_image.fits", pixsize)
-    
-catch e
-    println("\nError during reconstruction:")
-    println(e)
-    println("\nStacktrace:")
-    for (exc, bt) in Base.catch_stack()
-        showerror(stdout, exc, bt)
-        println()
+    # Run image reconstruction
+    println("\nRunning image reconstruction...")
+    println("Configuration: DATA-DRIVEN mode with custom regularization")
+    println("  - Flat initial model (no bias)")
+    println("  - Custom regularization parameters")
+    println("  - Extended iterations for full convergence")
+    println("This may take several minutes...")
+
+    try
+        # Basic reconstruction using OITOOLS
+        println("Starting image reconstruction...")
+
+        # reconstruct expects: (initial_image, data, nfft_plan; keyword_args)
+        println("Running reconstruction algorithm...")
+        println("Note: Look for colored output showing V2, T3A, T3P values on each iteration")
+        println("      These are REDUCED chi-squared values (chi²/N_measurements)")
+        println("      Target: values close to 1.0 indicate good fit\n")
+
+        reconstructed_image = reconstruct(
+            initial_image,
+            data,
+            nfft_plan,
+            maxiter=10000,  # Many iterations to fit data with minimal regularization
+            verb=true,
+            regularizers=regularizers,
+            weights=[1.0, 1.0, 1.0],  # Equal weight to all data - V2, T3 amplitude, T3 phase
+            ftol=(1e-6, 1e-8),  # Very tight convergence - let it fit the data fully
+            xtol=(1e-6, 1e-8),
+            gtol=(1e-6, 1e-8)
+        )
+
+        println("\nReconstruction complete!")
+
+        # Display final image statistics
+        println("\nFinal image statistics:")
+        img_min = minimum(reconstructed_image)
+        img_max = maximum(reconstructed_image)
+        img_mean = mean(reconstructed_image)
+        img_std = std(reconstructed_image)
+        dynamic_range = img_max - img_min
+
+        println("  Min pixel value: $img_min")
+        println("  Max pixel value: $img_max")
+        println("  Mean pixel value: $img_mean")
+        println("  Std dev: $img_std")
+        println("  Dynamic range: $dynamic_range")
+        println("  Total flux: $(sum(reconstructed_image))")
+        println("  Image dimensions: $(size(reconstructed_image))")
+
+        # Check if image is too uniform
+        relative_range = dynamic_range / img_max
+        if relative_range < 0.01
+            println("\n⚠ WARNING: Image is very uniform (dynamic range < 1%)")
+            println("  This suggests regularization is too strong.")
+            println("  Try weaker parameters (e.g., 1e-8 to 1e-9)")
+        elseif relative_range < 0.1
+            println("\n⚠ Note: Image has low contrast (dynamic range < 10%)")
+            println("  Consider reducing regularization for more structure.")
+        end
+
+        # Display and save results
+        println("\nCreating visualization...")
+
+        # Create coordinate arrays for plotting
+        extent = npix * pixsize / 2
+        coords = range(-extent, extent, length=npix)
+
+        # Choose appropriate color limits
+        # For very uniform images, use min-max range to show any variation
+        # For normal images, use 0-max to show structure clearly
+        if relative_range < 0.1
+            color_limits = (img_min, img_max)
+            println("  Using full dynamic range for color scale (min to max)")
+        else
+            color_limits = (0, img_max)
+            println("  Using standard color scale (0 to max)")
+        end
+
+        # Plot the reconstructed image with parameter info in title
+        param_str = "C=$(centering_value) E=$(entropy_value) TV=$(tv_value)"
+        p = heatmap(coords, coords,
+                    reconstructed_image',
+                    aspect_ratio=:equal,
+                    xlabel="RA offset (mas)",
+                    ylabel="Dec offset (mas)",
+                    title="Reconstructed Image #$reconstruction_count\n$param_str",
+                    color=:hot,
+                    clims=color_limits)
+
+        # Save with unique filenames
+        png_filename = "reconstructed_image_$(reconstruction_count).png"
+        fits_filename = "reconstructed_image_$(reconstruction_count).fits"
+
+        savefig(p, png_filename)
+        println("Saved: $png_filename")
+
+        # Also save as FITS file
+        println("Saving FITS file...")
+        save_fits(reconstructed_image, fits_filename, pixsize)
+
+        println("\n✓ Reconstruction #$reconstruction_count complete!")
+        println("  Files saved: $png_filename, $fits_filename")
+
+    catch e
+        println("\n⚠ Error during reconstruction:")
+        println(e)
+        println("\nStacktrace:")
+        for (exc, bt) in Base.catch_stack()
+            showerror(stdout, exc, bt)
+            println()
+        end
+        println("\nPress Enter to continue or type 'exit' to quit...")
+        continue_input = strip(readline())
+        if lowercase(continue_input) == "exit"
+            break
+        end
     end
 end
 
-println("\nImage reconstruction complete!")
-println("Press Enter to exit...")
-readline()
+println("\n" * "="^70)
+println("Image reconstruction session complete!")
+println("Total reconstructions performed: $reconstruction_count")
+println("="^70)
