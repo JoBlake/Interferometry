@@ -177,20 +177,76 @@ println("\nSetting up image reconstruction...")
 
 # Image size and pixel scale
 npix = 256  # Number of pixels (increased for better sampling)
-fov = 30.0  # FOV optimized for ~10-15 mas stellar disks
-pixsize = fov / npix  # Pixel size in mas (~0.12 mas/pixel)
+fov = 60.0  # FOV optimized for well-resolved ~15-20 mas stellar disks
+pixsize = fov / npix  # Pixel size in mas (~0.23 mas/pixel)
 
 println("Image size: $npix x $npix pixels")
 println("Pixel scale: $pixsize mas/pixel")
 println("Field of view: $fov mas")
 
-# Create initial image as a uniform disk model
-# Disk diameter in mas
-disk_diameter = 4.0  # mas
-disk_radius_pixels = (disk_diameter / 2.0) / pixsize  # Convert to pixels
+# Prompt user for initial model configuration
+println("\n" * "="^70)
+println("INITIAL MODEL CONFIGURATION")
+println("="^70)
 
-# Choose initial model type
-initial_model = "gaussian"  # Use Gaussian - more realistic for stellar disks
+# Prompt for initial model type
+println("\nSelect initial model type:")
+println("  1. Uniform disk (recommended for Pi_GRU)")
+println("  2. Gaussian")
+println("  3. Flattened Gaussian (disk-like)")
+print("Enter choice [1-3, default: 1]: ")
+model_choice = strip(readline())
+
+if isempty(model_choice)
+    initial_model = "disk"
+    println("  Using default: Uniform disk")
+elseif model_choice == "1"
+    initial_model = "disk"
+elseif model_choice == "2"
+    initial_model = "gaussian"
+elseif model_choice == "3"
+    initial_model = "flattened_gaussian"
+else
+    println("⚠ Invalid choice. Using default: disk")
+    initial_model = "disk"
+end
+
+# Auto-estimate size based on data
+mean_v2 = mean(data.v2)
+if mean_v2 > 0.7
+    suggested_diameter = 2.0  # Very compact, ~1-3 mas
+elseif mean_v2 > 0.4
+    suggested_diameter = 4.0  # Compact, ~3-6 mas
+elseif mean_v2 > 0.2
+    suggested_diameter = 8.0  # Moderately resolved, ~6-12 mas
+elseif mean_v2 > 0.1
+    suggested_diameter = 18.0  # Well resolved, ~12-25 mas
+elseif mean_v2 > 0.05
+    suggested_diameter = 25.0  # Very extended
+else
+    suggested_diameter = 30.0  # Extremely extended, >25 mas
+end
+
+# Prompt for initial disk/source size
+println("\nData analysis: Mean V² = $(round(mean_v2, digits=4))")
+println("Suggested initial diameter: $suggested_diameter mas")
+print("Enter initial diameter in mas [default: $suggested_diameter]: ")
+diameter_input = strip(readline())
+
+if isempty(diameter_input)
+    disk_diameter = suggested_diameter
+    println("  Using suggested: $disk_diameter mas")
+else
+    disk_diameter = tryparse(Float64, diameter_input)
+    if disk_diameter === nothing || disk_diameter <= 0
+        println("⚠ Invalid input. Using suggested: $suggested_diameter mas")
+        disk_diameter = suggested_diameter
+    end
+end
+
+disk_radius_pixels = (disk_diameter / 2.0) / pixsize  # Convert to pixels
+println("  Diameter: $disk_diameter mas")
+println("  Radius: $(round(disk_radius_pixels, digits=1)) pixels")
 
 # Create coordinate grids (used by all models)
 center = npix / 2 + 0.5
@@ -199,66 +255,50 @@ y = repeat(reshape(1:npix, npix, 1), 1, npix) .- center  # Column vector repeate
 r = sqrt.(x.^2 .+ y.^2)  # Radial distance from center in pixels
 
 if initial_model == "disk"
-    println("Creating initial uniform disk model...")
-
-    # AUTO-ADJUST disk size based on mean V²
-    # These thresholds match quick_diagnostic.jl recommendations
-    mean_v2 = mean(data.v2)
-
-    if mean_v2 > 0.7
-        disk_diameter = 2.0  # Very compact, ~1-3 mas
-    elseif mean_v2 > 0.4
-        disk_diameter = 4.0  # Compact, ~3-6 mas
-    elseif mean_v2 > 0.2
-        disk_diameter = 8.0  # Moderately resolved, ~6-12 mas
-    elseif mean_v2 > 0.1
-        disk_diameter = 18.0  # Well resolved, ~12-25 mas
-    elseif mean_v2 > 0.05
-        disk_diameter = 25.0  # Very extended
-    else
-        disk_diameter = 30.0  # Extremely extended, >25 mas
-    end
-
-    println("  Data mean V²: $(round(mean_v2, digits=4))")
-    println("  Auto-selected disk diameter: $disk_diameter mas")
-
-    disk_radius_pixels = (disk_diameter / 2.0) / pixsize
-    println("  Disk radius: $(round(disk_radius_pixels, digits=1)) pixels")
+    println("\nCreating initial uniform disk model...")
+    println("  Using user-specified diameter: $disk_diameter mas")
 
     # Create uniform disk: 1 inside radius, 0 outside
     initial_image = zeros(Float64, npix, npix)
     initial_image[r .<= disk_radius_pixels] .= 1.0
 
 elseif initial_model == "gaussian"
-    println("Creating initial Gaussian model...")
+    println("\nCreating initial Gaussian model...")
+    println("  Using user-specified diameter: $disk_diameter mas")
 
-    # AUTO-ADJUST Gaussian size based on mean V²
-    # These thresholds match quick_diagnostic.jl recommendations
-    mean_v2 = mean(data.v2)
-
-    if mean_v2 > 0.7
-        fwhm_mas = 2.0  # Very compact, ~1-3 mas
-    elseif mean_v2 > 0.4
-        fwhm_mas = 4.0  # Compact, ~3-6 mas
-    elseif mean_v2 > 0.2
-        fwhm_mas = 8.0  # Moderately resolved, ~6-12 mas
-    elseif mean_v2 > 0.1
-        fwhm_mas = 18.0  # Well resolved, ~12-25 mas
-    elseif mean_v2 > 0.05
-        fwhm_mas = 25.0  # Very extended
-    else
-        fwhm_mas = 30.0  # Extremely extended, >25 mas
-    end
-
-    println("  Data mean V²: $(round(mean_v2, digits=4))")
-    println("  Auto-selected FWHM: $fwhm_mas mas")
-
+    # Use disk_diameter as FWHM
+    fwhm_mas = disk_diameter
     fwhm_pixels = fwhm_mas / pixsize
     sigma_pixels = fwhm_pixels / 2.355  # Convert FWHM to sigma
+    println("  FWHM: $fwhm_mas mas")
+    println("  Sigma: $(round(sigma_pixels, digits=1)) pixels")
+
+    # Create pure 2D Gaussian
+    initial_image = exp.(-(r.^2) ./ (2 * sigma_pixels^2))
+
+elseif initial_model == "flattened_gaussian"
+    println("\nCreating initial flattened Gaussian model...")
+    println("  Using user-specified diameter: $disk_diameter mas")
+
+    # Use disk_diameter as FWHM
+    fwhm_mas = disk_diameter
+    fwhm_pixels = fwhm_mas / pixsize
+    sigma_pixels = fwhm_pixels / 2.355  # Convert FWHM to sigma
+    println("  FWHM: $fwhm_mas mas")
     println("  Sigma: $(round(sigma_pixels, digits=1)) pixels")
 
     # Create 2D Gaussian
     initial_image = exp.(-(r.^2) ./ (2 * sigma_pixels^2))
+
+    # Flatten the peak - clip values above threshold
+    # Use 70% of peak to create a flat top in the center
+    flatten_threshold = 0.7
+    peak_value = maximum(initial_image)
+    flatten_level = flatten_threshold * peak_value
+    initial_image[initial_image .> flatten_level] .= flatten_level
+
+    println("  Peak flattening: Values above $(round(flatten_threshold*100, digits=0))% of peak set to plateau")
+    println("  This creates a more disk-like profile")
 
 else  # "flat"
     println("Creating flat uniform initial model...")
@@ -335,87 +375,94 @@ while true
     println("REGULARIZATION PARAMETER INPUT (Reconstruction #$reconstruction_count)")
     println("="^70)
     println("\nAvailable regularizers: centering, entropy, tv (Total Variation)")
-    println("Typical ranges: 1e-8 (very weak) to 1e-4 (strong)")
-    println("\nRecommended starting values (based on Pi_GRU target):")
-    println("  - Centering: 1e-5 (prevents image drift)")
-    println("  - Entropy:   1e-6 (moderate smoothing)")
-    println("  - TV:        1e-6 (moderate edge preservation)")
+    println("Typical ranges: 1e-10 (very weak) to 1e-5 (strong)")
+    println("\nOptimized defaults for Pi_GRU (well-resolved, asymmetric source):")
+    println("  - Centering: 1e-6 (minimal image drift)")
+    println("  - Entropy:   1e-8 (very weak smoothing - let data dominate)")
+    println("  - TV:        0 (disabled - can cause ring artifacts)")
     println("\nPress Enter for defaults, or enter custom value")
     println("Type 'exit' at any prompt to quit\n")
 
     # Input for centering parameter
-    print("Enter CENTERING parameter [1e-5]: ")
+    print("Enter CENTERING parameter [1e-6]: ")
     centering_input = strip(readline())
     if lowercase(centering_input) == "exit"
         println("\nExiting reconstruction loop...")
         break
     end
     if isempty(centering_input)
-        centering_value = 1e-5
-        println("  Using default: 1e-5")
+        centering_value = 1e-6
+        println("  Using default: 1e-6")
     else
         centering_value = tryparse(Float64, centering_input)
         if centering_value === nothing
-            println("⚠ Invalid input. Using default: 1e-5")
-            centering_value = 1e-5
+            println("⚠ Invalid input. Using default: 1e-6")
+            centering_value = 1e-6
         end
     end
 
     # Input for entropy parameter
-    print("Enter ENTROPY parameter [1e-6]: ")
+    print("Enter ENTROPY parameter [1e-8]: ")
     entropy_input = strip(readline())
     if lowercase(entropy_input) == "exit"
         println("\nExiting reconstruction loop...")
         break
     end
     if isempty(entropy_input)
-        entropy_value = 1e-6
-        println("  Using default: 1e-6")
+        entropy_value = 1e-8
+        println("  Using default: 1e-8")
     else
         entropy_value = tryparse(Float64, entropy_input)
         if entropy_value === nothing
-            println("⚠ Invalid input. Using default: 1e-6")
-            entropy_value = 1e-6
+            println("⚠ Invalid input. Using default: 1e-8")
+            entropy_value = 1e-8
         end
     end
 
     # Input for TV parameter
-    print("Enter TV (Total Variation) parameter [1e-6]: ")
+    print("Enter TV (Total Variation) parameter [0]: ")
     tv_input = strip(readline())
     if lowercase(tv_input) == "exit"
         println("\nExiting reconstruction loop...")
         break
     end
     if isempty(tv_input)
-        tv_value = 1e-6
-        println("  Using default: 1e-6")
+        tv_value = 0.0
+        println("  Using default: 0 (TV disabled)")
     else
         tv_value = tryparse(Float64, tv_input)
         if tv_value === nothing
-            println("⚠ Invalid input. Using default: 1e-6")
-            tv_value = 1e-6
+            println("⚠ Invalid input. Using default: 0")
+            tv_value = 0.0
         end
     end
 
-    # Build regularizers list
-    regularizers = [
-        ("centering", centering_value),
-        ("entropy", entropy_value),
-        ("tv", tv_value)
-    ]
+    # Build regularizers list (only include non-zero values)
+    regularizers = []
+    if centering_value > 0
+        push!(regularizers, ("centering", centering_value))
+    end
+    if entropy_value > 0
+        push!(regularizers, ("entropy", entropy_value))
+    end
+    if tv_value > 0
+        push!(regularizers, ("tv", tv_value))
+    end
 
     println("\n" * "-"^70)
     println("Regularization settings:")
     println("  Centering: $centering_value")
     println("  Entropy:   $entropy_value")
-    println("  TV:        $tv_value")
+    tv_status = tv_value == 0 ? " (disabled)" : ""
+    println("  TV:        $tv_value$tv_status")
+    println("  Active regularizers: $(length(regularizers))")
     println("-"^70)
 
     # Run image reconstruction
     println("\nRunning image reconstruction...")
     println("Configuration: DATA-DRIVEN mode with custom regularization")
-    println("  - Flat initial model (no bias)")
-    println("  - Custom regularization parameters")
+    println("  - Uniform disk initial model")
+    println("  - Minimal regularization (data dominates)")
     println("  - Extended iterations for full convergence")
     println("This may take several minutes...")
 
@@ -433,13 +480,13 @@ while true
             initial_image,
             data,
             nfft_plan,
-            maxiter=10000,  # Many iterations to fit data with minimal regularization
+            maxiter=5000,  # Sufficient iterations for well-sampled data
             verb=true,
             regularizers=regularizers,
             weights=[1.0, 1.0, 1.0],  # Equal weight to all data - V2, T3 amplitude, T3 phase
-            ftol=(1e-6, 1e-8),  # Very tight convergence - let it fit the data fully
-            xtol=(1e-6, 1e-8),
-            gtol=(1e-6, 1e-8)
+            ftol=(1e-5, 1e-7),  # Balanced convergence criteria
+            xtol=(1e-5, 1e-7),
+            gtol=(1e-5, 1e-7)
         )
 
         println("\nReconstruction complete!")

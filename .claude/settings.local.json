@@ -4,7 +4,10 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "Bash(julia check_versions.jl:*)",
-      "Bash(julia inspect_oitarget.jl:*)"
+      "Bash(julia inspect_oitarget.jl:*)",
+      "Bash(ls:*)",
+      "Bash(julia diagnose_data.jl:*)",
+      "Bash(julia analyze_result.jl:*)"
     ],
     "deny": [],
     "ask": []

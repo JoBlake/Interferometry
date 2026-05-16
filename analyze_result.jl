@@ -7,9 +7,43 @@ println("="^70)
 println("RECONSTRUCTED IMAGE ANALYSIS")
 println("="^70)
 
+# Prompt user for FITS file
+println("\nEnter the path to your FITS file:")
+println("(Press Enter to use: reconstructed_image.fits)")
+print("> ")
+
+user_input = readline()
+
+if isempty(strip(user_input))
+    # Use default
+    filename = "reconstructed_image.fits"
+    println("Using default file: $filename")
+else
+    filename = strip(user_input)
+end
+
+# Check if file exists
+if !isfile(filename)
+    println("\n⚠ Error: File not found: $filename")
+    println("\nAvailable .fits files in current directory:")
+    fits_files = filter(f -> endswith(f, ".fits"), readdir("."))
+    if isempty(fits_files)
+        println("  (none found)")
+    else
+        for f in fits_files
+            println("  - $f")
+        end
+    end
+    println("\nPress Enter to exit...")
+    readline()
+    exit(1)
+end
+
+println("\nLoading $filename...")
+
 # Read the reconstructed FITS file
-if isfile("reconstructed_image.fits")
-    f = FITS("reconstructed_image.fits")
+if isfile(filename)
+    f = FITS(filename)
     img = read(f[1])
     close(f)
 
@@ -64,12 +98,16 @@ if isfile("reconstructed_image.fits")
                 levels=levels,
                 xlabel="Pixel X",
                 ylabel="Pixel Y",
-                title="Brightness Contours",
+                title="Brightness Contours - $filename",
                 aspect_ratio=:equal,
                 fill=true,
                 c=:hot)
-    savefig(p, "reconstructed_contours.png")
-    println("Saved: reconstructed_contours.png")
+
+    # Generate output filename based on input filename
+    base_name = replace(filename, ".fits" => "")
+    contour_file = base_name * "_contours.png"
+    savefig(p, contour_file)
+    println("Saved: $contour_file")
 
     # Create radial profile
     println("\nCalculating radial profile...")
@@ -94,15 +132,13 @@ if isfile("reconstructed_image.fits")
     p2 = plot(r_bins[1:end-1], profile[1:end-1],
               xlabel="Radius (pixels)",
               ylabel="Mean brightness",
-              title="Radial Profile",
+              title="Radial Profile - $filename",
               legend=false,
               lw=2)
-    savefig(p2, "radial_profile.png")
-    println("Saved: radial_profile.png")
 
-else
-    println("\n⚠ reconstructed_image.fits not found!")
-    println("   Make sure the reconstruction completed successfully.")
+    profile_file = base_name * "_radial_profile.png"
+    savefig(p2, profile_file)
+    println("Saved: $profile_file")
 end
 
 println("\n" * "="^70)
